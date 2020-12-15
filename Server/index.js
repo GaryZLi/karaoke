@@ -1,61 +1,115 @@
+const fs = require('fs')
+const youtubedl = require('youtube-dl')
+const user = '';
+const location = `C:/Users/${user}/Desktop/karaokeSongs`;
+
+// // jia ge
+
+if (!user.length) {
+    console.log('enter user');
+    process.exit(1);
+}
+
 const express = require('express');
 const cors = require('cors');
-const ytdl = require('ytdl-core');
+const { default: Axios } = require('axios');
+const port = 5000;
+
 const app = express();
-const PORT = 4000;
 
 app.use(cors());
+app.use(express.json());
 
-app.listen(PORT, () => {
-	console.log(`Server Works !!! At port ${PORT}`);
+app.get('/', (req, res) => {
+    fs.readdir(location, (err, files) => {
+        if (err) {
+            return fs.writeFile('logs.txt', `[${new Date()}] - ` + JSON.stringify(err) + '\n', err => {
+                if (err) {
+                    fs.writeFile('logs.txt', `[${new Date()}] - ` + JSON.stringify(err) + '\n', err => {
+                        if (err) throw err;
+                    });
+                }
+            });
+        }
+
+        res.status(200).send(files);
+    })
 });
 
-app.get('/downloadmp3', async (req, res, next) => {
-	try {
-		var url = req.query.url;
-		if(!ytdl.validateURL(url)) {
-			return res.sendStatus(400);
-		}
-		let title = 'audio';
+app.get('/:videoName', (req, res) => {
+    if (!req.params.videoName) {
+        // in this case it shuld try to redownload
+        console.log('there is no vid')
+        res.send();
+    }
 
-		await ytdl.getBasicInfo(url, {
-			format: 'mp4'
-		}, (err, info) => {
-			if (err) throw err;
-			title = info.player_response.videoDetails.title.replace(/[^\x00-\x7F]/g, "");
-		});
+    const path = `${location}/${req.params.videoName}`;
 
-		res.header('Content-Disposition', `attachment; filename="${title}.mp3"`);
-		ytdl(url, {
-			format: 'mp3',
-			filter: 'audioonly',
-		}).pipe(res);
+    // const stat = fs.statSync(path);
+    // const fileSize = stat.size;
+    // const head = {
+    //     'Content-Length': fileSize,
+    //     'Content-Type': 'video/mp4',
+    //     // 'Content-Range': 'bytes chunkStart-chunkEnd/chunkSize',
+    //     // 'Accept-Ranges': 'bytes',
+    // };
 
-	} catch (err) {
-		console.error(err);
-	}
+    // res.writeHead(200, head);
+    // fs.createReadStream(path).pipe(res);
+
+    const stat = fs.statSync(path);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+
+    if (range) {
+        const parts = range.replace(/bytes=/, "").split("-");
+        const start = parseInt(parts[0], 10);
+        const end = parts[1]
+            ? parseInt(parts[1], 10)
+            : fileSize - 1;
+        const chunksize = (end - start) + 1;
+        const file = fs.createReadStream(path, { start, end });
+        const head = {
+            'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+            'Accept-Ranges': 'bytes',
+            'Content-Length': chunksize,
+            'Content-Type': 'video/mp4',
+        };
+
+        res.writeHead(206, head);
+        file.pipe(res);
+    } else {
+        const head = {
+            'Content-Length': fileSize,
+            'Content-Type': 'video/mp4',
+        };
+
+        res.writeHead(200, head);
+        fs.createReadStream(path).pipe(res);
+    }
 });
 
-app.get('/downloadmp4', async (req, res, next) => {
-	try {
-		let url = req.query.url;
-		if(!ytdl.validateURL(url)) {
-			return res.sendStatus(400);
-		}
-		let title = 'video';
+app.post('/download', (req, res) => {
+    const video = youtubedl(req.body.link,
+        // Optional arguments passed to youtube-dl.
+        ['--format=18'],
+        // Additional options can be given for calling `child_process.execFile()`.
+        { cwd: __dirname });
 
-		await ytdl.getBasicInfo(url, {
-			format: 'mp4'
-		}, (err, info) => {
-			title = info.player_response.videoDetails.title.replace(/[^\x00-\x7F]/g, "");
-		});
+    // Will be called when the download starts.
+    video.on('info', function (info) {
+        console.log('Download started')
+        console.log('filename: ' + info._filename)
+        console.log('size: ' + info.size)
 
-		res.header('Content-Disposition', `attachment; filename="${title}.mp4"`);
-		ytdl(url, {
-			format: 'mp4',
-		}).pipe(res);
+        video.pipe(fs.createWriteStream(`${location}/${info._filename}`));
 
-	} catch (err) {
-		console.error(err);
-	}
+        fs.writeFile('links.txt', `[${info._filename}] - ${req.body.link}\n`, err => {
+            if (err) throw err;
+        });
+
+        res.status(200).send(info._filename);
+    })
 });
+
+app.listen(port, () => console.log('starting at', port));
